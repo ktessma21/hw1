@@ -2,3 +2,5 @@
 pytest
 tiktoken
 psutil
+numpy
+pytorch

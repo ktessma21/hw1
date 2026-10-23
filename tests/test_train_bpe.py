@@ -1,9 +1,61 @@
 #!/usr/bin/env python3
 import json
 import time
+from collections import Counter
+
+from cs336_basics.tokenizer import Tokenizer, build_new
+
 
 from .adapters import run_train_bpe
 from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
+
+
+# def test_train_bpe_merges_with_initialized_vocab():
+#     sequences = Counter(
+#         {
+#             (b"a", b"b", b"a", b"b"): 2,
+#             (b"a", b"b"): 1,
+#         }
+#     )
+#     initial_vocab = {b"a": 0, b"b": 1}
+
+#     vocab, merges = train_bpe_merges(sequences, initial_vocab, vocab_size=3)
+
+#     assert merges == [(b"a", b"b")]
+#     assert vocab == {b"a": 0, b"b": 1, b"ab": 2}
+#     assert sequences == Counter({(b"ab", b"ab"): 2, (b"ab",): 1})
+
+
+# def test_pair_index_lists_sequence_once_when_pair_repeats():
+#     text = "moonshoots foot"
+#     sequence = tuple(bytes([byte]) for byte in text.encode("utf-8"))
+#     sequences = Counter({sequence: 1})
+
+#     pair, pair_to_token = find_max_pair_token(sequences)
+
+#     assert pair == (b"o", b"o")
+#     assert pair_to_token[pair] == [sequence]
+
+#     merge_tokens(pair, sequences, pair_to_token)
+
+#     assert sequences == Counter(
+#         {
+#             (
+#                 b"m",
+#                 b"oo",
+#                 b"n",
+#                 b"s",
+#                 b"h",
+#                 b"oo",
+#                 b"t",
+#                 b"s",
+#                 b" ",
+#                 b"f",
+#                 b"oo",
+#                 b"t",
+#             ): 1
+#         }
+#     )
 
 
 def test_train_bpe_speed():
@@ -23,6 +75,7 @@ def test_train_bpe_speed():
     )
     end_time = time.time()
     assert end_time - start_time < 1.5
+    print(end_time - start_time)
 
 
 def test_train_bpe():
@@ -63,3 +116,43 @@ def test_train_bpe():
     # have been constructed differently, we'll make sure that the vocab keys and values match)
     assert set(vocab.keys()) == set(reference_vocab.keys())
     assert set(vocab.values()) == set(reference_vocab.values())
+
+
+def test_build_new_combines_matching_replacements():
+    affected_sequences = Counter({
+        (b"a", b"b", b"ab"): 2,
+        (b"ab", b"a", b"b"): 3,
+    })
+    sequences = Counter()  # Old sequences have already been removed.
+
+    result = build_new(
+        merged_pair=(b"a", b"b"),
+        affected_sequences=affected_sequences,
+        sequences=sequences,
+    )
+
+    expected = Counter({
+        (b"ab", b"ab"): 5,
+    })
+
+    assert result == expected
+    assert sequences == expected
+
+
+def test_train_bpe_from_files(tmp_path):
+    vocab, merges = run_train_bpe(FIXTURES_PATH / "corpus.en", 500, ["<|endoftext|>"])
+    byte_encoder = gpt2_bytes_to_unicode()
+
+    def serialize(token):
+        return "".join(byte_encoder[byte] for byte in token)
+
+    vocab_path = tmp_path / "vocab.json"
+    merges_path = tmp_path / "merges.txt"
+    vocab_path.write_text(json.dumps({serialize(token): i for i, token in vocab.items()}), encoding="utf-8")
+    merges_path.write_text("\n".join(f"{serialize(left)} {serialize(right)}" for left, right in merges), encoding="utf-8")
+    tokenizer = Tokenizer.from_files(str(vocab_path), str(merges_path), ["<|endoftext|>"])
+    assert tokenizer.vocab == vocab
+    assert list(tokenizer.merge_rank) == merges
+    text = "Hello café! <|endoftext|> 🌍"
+    assert tokenizer.encode(text) == Tokenizer(vocab, merges, ["<|endoftext|>"]).encode(text)
+    assert tokenizer.decode(tokenizer.encode(text)) == text
